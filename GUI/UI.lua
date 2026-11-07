@@ -739,7 +739,7 @@ do
       local seed = (G.Frost or 100) * 1000 + i * 100 + j * 100
       local noise = math.abs(math.sin(seed * 12.9898) * 43758.5453)
       noise = noise - math.floor(noise)
-      local brightness = 0.95 + noise * 0.1
+      local brightness = math.clamp(0.95 + noise * 0.1, 0, 1)
       colorKeys[#colorKeys + 1] = ColorSequenceKeypoint.new(j / stops, Color3.new(brightness, brightness, brightness))
       local noiseOpacity = math.clamp((1 - (G.NoiseOpacity or 0.08)) + noise * (G.NoiseOpacity or 0.08) * 0.5, 0.5, 1)
       transKeys[#transKeys + 1] = NumberSequenceKeypoint.new(j / stops, noiseOpacity)
