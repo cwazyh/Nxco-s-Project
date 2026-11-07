@@ -23,7 +23,7 @@
 --   - chromatic aberration split hairlines on the window rim only
 --   - inset glare beams (no rounded-corner spill)
 --   - rounded layered drop shadow (no square corners), synced to motion
---   - whole-window dragging (button-aware hit test), floating traffic lights
+--   - whole-window dragging (button-aware hit test), transparent hotbar controls
 --   - profile card opens a SETTINGS content page like a normal button
 --   - always-on-top watchdog (max DisplayOrder, re-asserted)
 --  Module shape: loadstring(src)() -> UI ; UI.init() ; UI.kill()
@@ -57,18 +57,17 @@ UI.Config = {
     GlareAngle     = -50,
     GlareFollow    = 8,      -- mouse parallax px
     Blur           = 26,     -- legacy: global BlurEffect is now forced 0 (see THEMES.blurb);
-    LineFx         = false,  -- edge linework (refraction band rings, fresnel ring, rim
-                             -- light, CA hairlines): FALSE = clean borderless glass
+    LineFx         = false,  -- no outlines or edge strokes
     Frost          = 100,    -- painted backdrop frost strength (0-100+): heavier = creamier.
                              -- True LOCALIZED blur only behind our UI - sampled via camera
                              -- raycasts, blurred in Luau, written to an EditableImage.
     SweepGap       = 1.7,    -- seconds between shine sweep repeats while hovered
     -- liquid-glass interaction ports (alexkkork/liquid-glass-luau Pro spec) --
-    ElasticEnabled   = true,  -- spring "liquid" pull of interactive panes toward cursor
+    ElasticEnabled   = false, -- keep panes still; retain hover sheen without cursor pull
     ElasticIntensity = 6,     -- max pull px at the pane edge
     SpringTension    = 170,   -- Pro spring defaults (tension/friction, semi-implicit Euler)
     SpringFriction   = 26,
-    HoverScale       = 1.02,  -- Pro default hover scale-up
+    HoverScale       = 1.0,
     HoverGlowOpacity = 0.12,  -- radial cursor-sheen peak inside panes
     BorderFollow     = 30,    -- deg of rim-gradient rotation chase from cursor X
     PressOverlayOp   = 0.94,  -- press darkening as TRANSPARENCY (1 = nothing, 0.94 = whisper)
@@ -87,6 +86,8 @@ local UIS       = game:GetService("UserInputService")
 local Lighting  = game:GetService("Lighting")
 local RunSvc    = game:GetService("RunService")
 local AssetSvc  = game:GetService("AssetService")
+local TextSvc   = game:GetService("TextService")
+local HttpSvc  = game:GetService("HttpService")
 local lp        = Players.LocalPlayer
 
 if not lp then
@@ -94,6 +95,66 @@ if not lp then
   return
 end
 print("[N's 'tion] LocalPlayer found: " .. tostring(lp.Name))
+
+local function safeFolderName(value)
+  local name = string.gsub(tostring(value), "[/\:%*%?\"<>|]", "_")
+  name = string.gsub(name, "^%s+", "")
+  name = string.gsub(name, "%s+$", "")
+  return name ~= "" and name or "Unknown Account"
+end
+
+local accountFolder = safeFolderName(lp.Name)
+local configDir = "Nxco's Project/Anime Expedition/" .. accountFolder
+local configPath = configDir .. "/config.json"
+local storedConfig
+local loadedConfig
+if type(readfile) == "function" then
+  local fileExists = true
+  if type(isfile) == "function" then
+    local ok, exists = pcall(isfile, configPath)
+    fileExists = ok and exists
+  end
+  if fileExists then
+    local readOk, raw = pcall(readfile, configPath)
+    if readOk and type(raw) == "string" then
+      local decodeOk, decoded = pcall(function() return HttpSvc:JSONDecode(raw) end)
+      if decodeOk and type(decoded) == "table" then
+        storedConfig = decoded
+        if decoded.AutoSave == true then loadedConfig = decoded end
+      elseif not decodeOk then
+        warn("[N's 'tion] config.json is invalid: " .. tostring(decoded))
+      end
+    elseif type(isfile) == "function" and fileExists then
+      warn("[N's 'tion] could not read config.json: " .. tostring(raw))
+    end
+  end
+else
+  warn("[N's 'tion] executor readfile is unavailable; saved settings cannot be loaded")
+end
+
+local function finiteNumber(value)
+  return type(value) == "number" and value == value and math.abs(value) < 100000
+end
+if loadedConfig then
+  if loadedConfig.Mode == "glass" or loadedConfig.Mode == "opaque" then
+    UI.Config.StartMode = loadedConfig.Mode
+  end
+  if loadedConfig.Theme == "light" or loadedConfig.Theme == "dark" then
+    UI.Config.StartTheme = loadedConfig.Theme
+  end
+  if finiteNumber(loadedConfig.Width) and finiteNumber(loadedConfig.Height) then
+    UI.Config.StartSize = Vector2.new(
+      math.clamp(loadedConfig.Width, UI.Config.MinSize.X, 4096),
+      math.clamp(loadedConfig.Height, UI.Config.MinSize.Y, 4096)
+    )
+  end
+  if finiteNumber(loadedConfig.X) and finiteNumber(loadedConfig.Y) then
+    UI.Config.StartPos = Vector2.new(
+      math.clamp(loadedConfig.X, 0, 100000),
+      math.clamp(loadedConfig.Y, 0, 100000)
+    )
+  end
+end
 
 local cons = {}
 local function bind(fn) cons[#cons+1] = fn end
@@ -113,16 +174,18 @@ local YELLOW   = Color3.fromRGB(255, 214, 10)
 
 local THEMES = {
   light = {
-    blur     = 0,    -- GLOBAL blur FORCED OFF: the frost behind our window is painted
-                     -- locally (camera-sampled EditableImage) so the world stays crisp
+    blur     = 0,    -- Never blur Lighting; the glass image is local to this UI.
     glareMul = 1.0,
-    winTint  = Color3.fromRGB(255, 255, 255), winT = 0.82, -- ~18% surface: visible glass
-    sideTint = Color3.fromRGB(255, 255, 255), sideT = 0.75,
-    pillTint = Color3.fromRGB(255, 255, 255), pillT = 0.65, pillHot = 0.50, pillSel = 0.32,
-    profT = 0.60, profHot = 0.46,
+    winTint  = Color3.fromRGB(222, 229, 244), winT = 0.66,
+    sideTint = Color3.fromRGB(224, 231, 246), sideT = 0.50,
+    pillTint = Color3.fromRGB(228, 234, 248), pillT = 0.36, pillHot = 0.28, pillSel = 0.20,
+    profT = 0.28, profHot = 0.20,
+    contentT = 0.40,
+    outerInset = 20,
+    panelGap = 22,
     opqWin = Color3.fromRGB(243, 244, 248), opqSide = Color3.fromRGB(248, 249, 252),
     opqSideT = 0.05, opqPill = Color3.fromRGB(255, 255, 255),
-    textHi = Color3.fromRGB(24, 27, 37), textDim = Color3.fromRGB(90, 96, 112),
+    textHi = Color3.new(0, 0, 0), textDim = Color3.new(0, 0, 0),
     grip = Color3.fromRGB(122, 128, 144),
     switchOff = Color3.fromRGB(172, 174, 186),
     shadowT = 0.968,
@@ -138,9 +201,12 @@ local THEMES = {
     sideTint = Color3.fromRGB(24, 26, 34), sideT = 0.35,
     pillTint = Color3.fromRGB(48, 50, 60), pillT = 0.28, pillHot = 0.19, pillSel = 0.14,
     profT = 0.24, profHot = 0.16,
+    contentT = 0.30,
+    outerInset = 20,
+    panelGap = 22,
     opqWin = Color3.fromRGB(52, 52, 58), opqSide = Color3.fromRGB(34, 34, 40),
     opqSideT = 0.06, opqPill = Color3.fromRGB(66, 66, 74),
-    textHi = Color3.fromRGB(248, 249, 252), textDim = Color3.fromRGB(206, 212, 226),
+    textHi = Color3.new(1, 1, 1), textDim = Color3.new(1, 1, 1),
     grip = Color3.fromRGB(206, 212, 226),
     switchOff = Color3.fromRGB(122, 122, 132),
     shadowT = 0.955,
@@ -156,22 +222,208 @@ local ICONS = {                      -- Lucide decal pack (Footagesus/Icons, MIT
   x        = "rbxassetid://110786993356448",
   minus    = "rbxassetid://118026365011536",
   maximize = "rbxassetid://76045941763188",
+  house    = "rbxassetid://98755624629571",
   clock    = "rbxassetid://121808839832144",
   settings = "rbxassetid://80758916183665",
   sliders  = "rbxassetid://85538382643347",
   moon     = "rbxassetid://83380517901735",
+  eyeOff   = "rbxassetid://135928786788378",
+  eye      = "rbxassetid://100033680381365",
+  play     = "rbxassetid://135609604299893",
+  pause    = "rbxassetid://74873705394436",
+  ellipsis = "rbxassetid://117978708573781",
+  textSearch = "rbxassetid://92345384671606",
+  save = "rbxassetid://126116963775616",
+  gift = "rbxassetid://10723351704",
 }
 
 local S = {
   mode = UI.Config.StartMode,
   dark = (UI.Config.StartTheme == "dark"),
-  minimized = false, full = false,
+  minimized = false, full = loadedConfig and loadedConfig.Fullscreen == true or false,
+  futureFeaturesPaused = loadedConfig and loadedConfig.FutureFeaturesPaused == true or false,
+  sidebarHidden = false,
+  restoreSidebarHidden = loadedConfig and loadedConfig.SidebarHidden == true or false,
+  autoSave = storedConfig == nil or storedConfig.AutoSave ~= false,
+  restoreSettings = loadedConfig and loadedConfig.SettingsOpen == true or false,
+  searchText = loadedConfig and type(loadedConfig.SearchText) == "string" and string.sub(loadedConfig.SearchText, 1, 200) or "",
+  featureToggles = {},
+  sel = loadedConfig and type(loadedConfig.SelectedCategory) == "number"
+    and math.clamp(math.floor(loadedConfig.SelectedCategory), 0, 2) or 0,
   winSize = UI.Config.StartSize,
   winPos  = UI.Config.StartPos,
   minSize = UI.Config.MinSize,
-  saved = nil, savedFull = nil,
-  sel = 0, -- 0 = no category, 1/2 = coming soon pages
+  saved = nil,
+  savedFull = loadedConfig and loadedConfig.Fullscreen and {
+    w = UI.Config.StartSize.X, h = UI.Config.StartSize.Y,
+    x = UI.Config.StartPos.X, y = UI.Config.StartPos.Y,
+  } or nil,
 }
+if loadedConfig and type(loadedConfig.FeatureToggles) == "table" then
+  for key, value in pairs(loadedConfig.FeatureToggles) do
+    if type(key) == "string" and #key > 0 and #key <= 100 and type(value) == "boolean" then
+      S.featureToggles[key] = value
+    end
+  end
+end
+local win, searchBox
+local settingsOpen = false
+local settingsBeforeSidebarHide = false
+local saveRevision = 0
+local function ensureConfigFolders()
+  if type(makefolder) ~= "function" then
+    error("executor makefolder is unavailable")
+  end
+  for _, path in ipairs({ "Nxco's Project", "Nxco's Project/Anime Expedition", configDir }) do
+    local exists = false
+    if type(isfolder) == "function" then
+      local ok, result = pcall(isfolder, path)
+      exists = ok and result == true
+    end
+    if not exists then
+      local ok, err = pcall(makefolder, path)
+      if not ok then
+        local checkOk, nowExists = pcall(isfolder, path)
+        if not checkOk or nowExists ~= true then error(err) end
+      end
+    end
+  end
+end
+
+local function writeConfig(force)
+  if not S.autoSave and not force then return end
+  if type(writefile) ~= "function" then
+    warn("[N's 'tion] executor writefile is unavailable; config.json was not saved")
+    return
+  end
+
+  local size = S.winSize
+  local pos = S.winPos
+  if S.full and S.savedFull then
+    size = Vector2.new(S.savedFull.w, S.savedFull.h)
+    pos = Vector2.new(S.savedFull.x, S.savedFull.y)
+  elseif S.minimized and S.saved then
+    size = Vector2.new(S.saved.w, S.saved.h)
+    pos = Vector2.new(S.saved.x, S.saved.y)
+  elseif win then
+    size = Vector2.new(win.Size.X.Offset, win.Size.Y.Offset)
+    pos = Vector2.new(win.Position.X.Offset, win.Position.Y.Offset)
+  end
+
+  local data = {
+    AutoSave = S.autoSave,
+    Mode = S.mode,
+    Theme = S.dark and "dark" or "light",
+    SidebarHidden = S.sidebarHidden,
+    FutureFeaturesPaused = S.futureFeaturesPaused,
+    FeatureToggles = S.featureToggles,
+    SelectedCategory = S.sel,
+    SettingsOpen = (S.sidebarHidden and settingsBeforeSidebarHide) or settingsOpen,
+    SearchText = searchBox and searchBox.Text or S.searchText,
+    Width = size.X,
+    Height = size.Y,
+    X = pos.X,
+    Y = pos.Y,
+    Fullscreen = S.full,
+  }
+  local encodeOk, encoded = pcall(function() return HttpSvc:JSONEncode(data) end)
+  if not encodeOk then
+    warn("[N's 'tion] could not encode config.json: " .. tostring(encoded))
+    return
+  end
+  local function prettyJson(compact)
+    local output = {}
+    local depth = 0
+    local inString = false
+    local escaped = false
+    local previousSignificant
+
+    for index = 1, #compact do
+      local char = string.sub(compact, index, index)
+      if inString then
+        table.insert(output, char)
+        if escaped then
+          escaped = false
+        elseif char == "\" then
+          escaped = true
+        elseif char == "\"" then
+          inString = false
+        end
+      elseif char == "\"" then
+        inString = true
+        table.insert(output, char)
+      elseif char == "{" or char == "[" then
+        table.insert(output, char)
+        depth = depth + 1
+        local nextChar = string.sub(compact, index + 1, index + 1)
+        if nextChar ~= "}" and nextChar ~= "]" then
+          table.insert(output, "
+")
+          table.insert(output, string.rep("  ", depth))
+        end
+      elseif char == "}" or char == "]" then
+        depth = depth - 1
+        if previousSignificant ~= "{" and previousSignificant ~= "[" then
+          table.insert(output, "
+")
+          table.insert(output, string.rep("  ", depth))
+        end
+        table.insert(output, char)
+      elseif char == "," then
+        table.insert(output, ",
+")
+        table.insert(output, string.rep("  ", depth))
+      elseif char == ":" then
+        table.insert(output, ": ")
+      else
+        table.insert(output, char)
+      end
+
+      if not inString and char ~= " " and char ~= "
+" and char ~= "" and char ~= "	" then
+        previousSignificant = char
+      elseif char == "\"" and not inString then
+        previousSignificant = char
+      end
+    end
+
+    return table.concat(output) .. "
+"
+  end
+  encoded = prettyJson(encoded)
+  local writeOk, writeErr = pcall(function()
+    ensureConfigFolders()
+    writefile(configPath, encoded)
+  end)
+  if not writeOk then
+    warn("[N's 'tion] could not save config.json: " .. tostring(writeErr))
+  end
+end
+
+local function scheduleConfigSave(force)
+  if not S.autoSave and not force then return end
+  saveRevision = saveRevision + 1
+  local revision = saveRevision
+  task.delay(0.5, function()
+    if revision == saveRevision then writeConfig(force) end
+  end)
+end
+function UI.GetToggleState(key, defaultValue)
+  if type(key) ~= "string" or #key == 0 then return defaultValue == true end
+  local value = S.featureToggles[key]
+  if type(value) == "boolean" then return value end
+  return defaultValue == true
+end
+
+function UI.SetToggleState(key, value)
+  if type(key) ~= "string" or #key == 0 or #key > 100 or type(value) ~= "boolean" then
+    return false
+  end
+  S.featureToggles[key] = value
+  scheduleConfigSave()
+  return true
+end
+UI.FutureFeaturesPaused = S.futureFeaturesPaused
 
 -- ============================================== cleanup / root
 local pg = lp:FindFirstChild("PlayerGui")
@@ -188,6 +440,15 @@ gui.DisplayOrder = 2147483647 -- always on top of every other PlayerGui layer (2
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
   gui.Parent = lp:WaitForChild("PlayerGui")
   UI._gui = gui
+  local function removeBorder(instance)
+    if instance:IsA("GuiObject") then
+      instance.BorderSizePixel = 0
+    end
+  end
+  bind(gui.DescendantAdded:Connect(removeBorder))
+  for _, instance in ipairs(gui:GetDescendants()) do
+    removeBorder(instance)
+  end
   print("[N's 'tion] ScreenGui parented to PlayerGui")
 
   -- NO GLOBAL BLUR: the localized "painted frost" system below handles blur
@@ -199,14 +460,18 @@ local function tw(o, ti, props) local t = TweenSvc:Create(o, ti, props); t:Play(
 
 -- themed text: every TextLabel is registered so applyTheme() can recolor live
 local textRefs = {}
-local function txt(parent, str, size, font, role, transp)
+local function txt(parent, str, size, font, role)
   local t = Instance.new("TextLabel")
   t.BackgroundTransparency = 1
   t.Font = font or Enum.Font.GothamMedium
   t.TextSize = size or 14
   t.TextColor3 = (role == "dim") and THEME.textDim or THEME.textHi
-  t.TextTransparency = transp or 0
+  t.TextXAlignment = Enum.TextXAlignment.Left
+  t.TextTransparency = 0
   t.Text = str
+  local padding = Instance.new("UIPadding", t)
+  padding.PaddingLeft = UDim.new(0, 2)
+  padding.PaddingRight = UDim.new(0, 2)
   t.Parent = parent
   textRefs[#textRefs + 1] = { o = t, r = role }
   return t
@@ -264,24 +529,23 @@ end
 local gripDots = {}
 local function shapeGrip(parent)
   local holder = Instance.new("Frame")
-  holder.Size = UDim2.fromOffset(12, 12)
+  holder.Size = UDim2.fromScale(1, 1)
   holder.BackgroundTransparency = 1
   holder.Parent = parent
-  for r = 0, 2 do
-    for c = 0, 2 do
-      if c + r <= 2 then
-        local d = Instance.new("Frame", holder)
-        d.Size = UDim2.fromOffset(2.5, 2.5)
-        d.Position = UDim2.new(0, c * 4.5, 0, r * 4.5)
-        d.BackgroundColor3 = THEME.grip
-        d.BackgroundTransparency = 0.35
-        d.BorderSizePixel = 0
-        corner(d, 2)
-        gripDots[#gripDots + 1] = d
-end
-    end
-    return holder
+  for _, point in ipairs({
+    { 11, 4.5 }, { 17.5, 4.5 },
+    { 4.5, 11 }, { 11, 11 }, { 4.5, 17.5 },
+  }) do
+    local d = Instance.new("Frame", holder)
+    d.Size = UDim2.fromOffset(2.5, 2.5)
+    d.Position = UDim2.fromOffset(point[1], point[2])
+    d.BackgroundColor3 = THEME.grip
+    d.BackgroundTransparency = 0.35
+    d.BorderSizePixel = 0
+    corner(d, 2)
+    gripDots[#gripDots + 1] = d
   end
+  return holder
 end
 
 -- ~~~~~~~~~~~~ glass material stack ~~~~~~~~~~~~
@@ -382,6 +646,7 @@ local function makeGlass(parent, radius, opts)
       local offsetAmount = refraction * math.pow(depthFactor, falloff)
       local band = Instance.new("Frame", pane)
       band.Name = "Refraction" .. side .. layerIdx
+      band.BackgroundTransparency = 0
       if side == "Top" or side == "Bottom" then
         band.Size = UDim2.new(1, 0, 0, edgeWidth)
         if side == "Top" then
@@ -414,7 +679,7 @@ local function makeGlass(parent, radius, opts)
         NumberSequenceKeypoint.new(0.5, 1),
         NumberSequenceKeypoint.new(1, 1),
       })
-      glassFx[#glassFx + 1] = { o = band, base = 1 - edgeOpacity }
+      glassFx[#glassFx + 1] = { o = band, property = "BackgroundTransparency", base = 0 }
     end
 
     for _, side in ipairs({ "Top", "Bottom", "Left", "Right" }) do
@@ -440,7 +705,8 @@ local function makeGlass(parent, radius, opts)
       ch.Size = UDim2.fromScale(1, 1)
       ch.Position = UDim2.fromOffset(baseOffset.X * abIntensity, baseOffset.Y * abIntensity)
       ch.AnchorPoint = Vector2.new(0, 0)
-      ch.BackgroundTransparency = 1
+      ch.BackgroundColor3 = tint
+      ch.BackgroundTransparency = 0
       ch.BorderSizePixel = 0
       ch.ZIndex = zIdx
       corner(ch, radius)
@@ -455,14 +721,17 @@ local function makeGlass(parent, radius, opts)
         NumberSequenceKeypoint.new(1 - edgeWidth, 1),
         NumberSequenceKeypoint.new(1, 1 - edgeOpacity),
       })
-      glassFx[#glassFx + 1] = { o = ch, base = 1 - edgeOpacity }
       return ch
     end
 
     local chRed   = makeChromaticChannel(redTint,   Vector2.new(-2, 0), 40)
     local chGreen = makeChromaticChannel(greenTint, Vector2.new(0, 0), 41)
     local chBlue  = makeChromaticChannel(blueTint,  Vector2.new(2, 0), 42)
-    rimSet[#rimSet + 1] = { s1 = chRed, s2 = chGreen, s3 = chBlue }
+    rimSet[#rimSet + 1] = {
+      s1 = chRed, s2 = chGreen, s3 = chBlue,
+      g1 = chRed:FindFirstChildOfClass("UIGradient"),
+      g2 = chBlue:FindFirstChildOfClass("UIGradient"),
+    }
 
     -- fresnel inner ring (FresnelInner / FresnelIntensity)
     local fres = Instance.new("Frame", pane)
@@ -485,7 +754,7 @@ local function makeGlass(parent, radius, opts)
       NumberSequenceKeypoint.new(0.75, 1),
       NumberSequenceKeypoint.new(1, 1),
     })
-    glassFx[#glassFx + 1] = { o = fs, base = 0 }
+    glassFx[#glassFx + 1] = { o = fs, property = "Transparency", base = 0 }
 
     -- glass rim light: thin white bevel - brightest top-left, vanishing bottom-right.
     -- Gradient-driven so it reads as material lighting, not a border outline.
@@ -499,7 +768,7 @@ local function makeGlass(parent, radius, opts)
       NumberSequenceKeypoint.new(0.6, 0.85),
       NumberSequenceKeypoint.new(1.0, 0.94),
     })
-    glassFx[#glassFx + 1] = { o = hi, base = 0 }
+    glassFx[#glassFx + 1] = { o = hi, property = "Transparency", base = 0 }
 
     -- hover shine sweeps: two light streaks that slide in from the LEFT and
     -- exit to the RIGHT while the window is hovered (repeats with a gap).
@@ -640,12 +909,57 @@ local function makeGlass(parent, radius, opts)
 end
 
 -- ============================================== WINDOW
-local win = makeGlass(gui, G.Radius, { name = "Window", real = true, interactive = true, glowMax = 0.08 })
+win = makeGlass(gui, G.Radius, { name = "Window", real = true, interactive = true, glowMax = 0.08 })
 win.Size = UDim2.fromOffset(S.winSize.X, S.winSize.Y)
 win.Position = UDim2.fromOffset(S.winPos.X, S.winPos.Y)
 win.ClipsDescendants = true
 win.ZIndex = 1
 S.win = win
+
+local hotbar = Instance.new("Frame", gui)
+hotbar.Name = "Hotbar"
+hotbar.BackgroundTransparency = 1
+hotbar.BorderSizePixel = 0
+hotbar.Position = win.Position
+hotbar.Size = UDim2.new(win.Size.X.Scale, win.Size.X.Offset, 0, 48)
+hotbar.ZIndex = 100
+hotbar.ClipsDescendants = false
+
+local function syncHotbar()
+  hotbar.Position = win.Position
+  hotbar.Size = UDim2.new(win.Size.X.Scale, win.Size.X.Offset, 0, 48)
+end
+bind(win:GetPropertyChangedSignal("Position"):Connect(syncHotbar))
+bind(win:GetPropertyChangedSignal("Size"):Connect(syncHotbar))
+
+local panicToggle = Instance.new("TextButton", hotbar)
+panicToggle.Name = "PanicToggle"
+panicToggle.AnchorPoint = Vector2.new(1, 0)
+panicToggle.Position = UDim2.new(1, -14, 0, 7)
+panicToggle.Size = UDim2.fromOffset(34, 34)
+panicToggle.BackgroundTransparency = 1
+panicToggle.BorderSizePixel = 0
+panicToggle.Text = ""
+panicToggle.AutoButtonColor = false
+panicToggle.ZIndex = 101
+
+local panicIcon = iconFx(panicToggle, ICONS.play, 22, THEME.textHi, 0)
+panicIcon.Name = "LucidePlayPause"
+panicIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+panicIcon.Position = UDim2.fromScale(0.5, 0.5)
+panicIcon.ZIndex = 102
+local function paintPanicGlyph()
+  panicIcon.Image = S.futureFeaturesPaused and ICONS.pause or ICONS.play
+  panicIcon.ImageColor3 = THEME.textHi
+end
+paintPanicGlyph()
+
+bind(panicToggle.Activated:Connect(function()
+  S.futureFeaturesPaused = not S.futureFeaturesPaused
+  UI.FutureFeaturesPaused = S.futureFeaturesPaused
+  paintPanicGlyph()
+  scheduleConfigSave()
+end))
 
 -- rounded layered drop shadow: sibling of win (win clips, so it can't live inside),
 -- synced to every size/position change so it never lags or squares off
@@ -687,11 +1001,10 @@ end
 -- ============================================== LOCAL BACKDROP FROST (v5.6)
 -- BlurEffect only blurs the ENTIRE camera - "blur just behind the UI" doesn't
 -- exist as a service. So we PAINT it: the world behind the window is
--- approximated on a coarse grid via camera raycasts (one color per cell, sky
--- fallback), blurred in Luau at G.Frost strength, and written into an
--- EditableImage that lives inside the window pane. Result: heavy frost ONLY
--- behind our UI, the world outside stays pixel-crisp. Refreshed continuously
--- on a ~2.5ms/frame raycast budget.
+-- sampled on a coarse grid via camera raycasts, blurred in Luau, and written
+-- into an EditableImage inside the window pane. When EditableImages aren't
+-- available, a smooth tint replaces the image rather than showing the coarse
+-- samples as visible blocks.
 local frost = {
   gw = 12, gh = 9,
   res = Vector2.new(96, 64),
@@ -708,12 +1021,29 @@ do
   layer.Size = UDim2.fromScale(1, 1)
   layer.BackgroundTransparency = 1
   layer.ScaleType = Enum.ScaleType.Stretch
-  layer.ZIndex = 20
+  layer.ZIndex = 2
   corner(layer, G.Radius)
   layer.Parent = win
   layer.Visible = false
   frost.vis[1] = layer
   frost.img = layer
+  local fallback = Instance.new("Frame", layer)
+  fallback.Name = "FallbackFrost"
+  fallback.Size = UDim2.fromScale(1, 1)
+  fallback.BackgroundColor3 = Color3.new(1, 1, 1)
+  fallback.BackgroundTransparency = 1
+  fallback.BorderSizePixel = 0
+  fallback.ZIndex = 21
+  corner(fallback, G.Radius)
+  local fallbackGradient = Instance.new("UIGradient", fallback)
+  fallbackGradient.Rotation = 90
+  fallbackGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(224, 230, 245)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
+  })
+  fallbackGradient.Transparency = NumberSequence.new(1)
+  frost.fallback = fallback
 
   -- FROST NOISE LAYERS: multiple overlapping frames with seeded pseudo-random
   -- patterns at different rotations and scales - simulates the grain texture
@@ -751,42 +1081,45 @@ do
   frost.noiseLayers = noiseLayers
 
   local okE, edi = pcall(function()
-    return AssetSvc:CreateEditableImage(frost.res)
+    return AssetSvc:CreateEditableImage({ Size = frost.res })
   end)
+  local imageError = not okE and tostring(edi) or nil
   if okE and edi then
     frost.edi = edi
     UI._frostEdi = edi
     local bound = false
-    pcall(function() layer.Image = edi end)
-    local iv
-    pcall(function() iv = layer.Image end)
-    if iv == nil or (type(iv) == "string" and #iv == 0) then
-      pcall(function() layer.Image = (Content.fromObject and Content.fromObject(edi)) end)
-      pcall(function() iv = layer.Image end)
+    local contentOk, imageContent = pcall(function()
+      return Content.fromObject(edi)
+    end)
+    if not contentOk then
+      imageError = "Content.fromObject failed: " .. tostring(imageContent)
     end
-    if type(iv) == "userdata" or (type(iv) == "string" and #iv > 0) then bound = true end
+    if contentOk and imageContent then
+      local bindOk, bindError = pcall(function()
+        layer.ImageContent = imageContent
+      end)
+      if not bindOk then
+        imageError = "ImageContent assignment failed: " .. tostring(bindError)
+      end
+      if bindOk then
+        local readOk, currentContent = pcall(function()
+          return layer.ImageContent
+        end)
+        bound = readOk and currentContent ~= nil
+        if not bound then
+          imageError = "ImageContent did not retain the EditableImage"
+        end
+      end
+    elseif contentOk then
+      imageError = "Content.fromObject returned no image content"
+    end
     frost.ok = bound
   end
   if not frost.ok then
-    -- fallback: pixel-cell frost so the effect exists even without EDI binding
-    frost.cells = {}
-    local order = 0
-    for gy = 1, frost.gh do
-      for gx = 1, frost.gw do
-        order = order + 1
-        local c = Instance.new("Frame", layer)
-        c.Name = "F" .. order
-        c.BorderSizePixel = 0
-        c.AnchorPoint = Vector2.new(0.5, 0.5)
-        c.Position = UDim2.new((gx - 0.5) / frost.gw, 0, (gy - 0.5) / frost.gh, 0)
-        c.Size = UDim2.new(1 / frost.gw + 0.02, 0, 1 / frost.gh + 0.02, 0)
-        c.BackgroundColor3 = Color3.new(1, 1, 1)
-        c.BackgroundTransparency = 0.5
-        c.ZIndex = 0
-        frost.cells[order] = c
-      end
-    end
-    frost.ok = false -- EDI path off; fallback paints frames below
+    fallback.Visible = true
+    warn("[N's 'tion] localized blur unavailable: " .. (imageError or "CreateEditableImage returned no image") .. " (global blur remains off)")
+  else
+    fallback.Visible = false
   end
 
   local grid = {}
@@ -817,6 +1150,7 @@ do
   end
 
   frost.chunk = function(budgetMs)
+    if not frost.ok then return end
     local cam = workspace.CurrentCamera
     if not cam then return end
     local as = win.AbsoluteSize
@@ -840,6 +1174,7 @@ if (os.clock() - t0) * 1000 > budgetMs then break end
   end
 
   local function frostApply()
+  if not frost.ok then return end
   local gw, gh, grid = frost.gw, frost.gh, frost.grid
   if not grid then return end
   -- frost strength -> box-blur radius in cells; 100+ => heavy diffusion
@@ -911,14 +1246,6 @@ if (os.clock() - t0) * 1000 > budgetMs then break end
     end
     pcall(function() frost.edi:WritePixelsBuffer(Vector2.zero, buf) end)
     frost.img.ImageTransparency = math.clamp(1 - (0.18 + 0.40 * math.min(1, (G.Frost or 100) / 100)), 0, 1)
-  else
-    -- fallback painting: cell frames get the blurred colors directly
-    if frost.cells then
-      for i = 1, gw * gh do
-        local c = frost.cells[i]
-        if c then c.BackgroundColor3 = Color3.new(math.clamp(aR[i], 0, 1), math.clamp(aG[i], 0, 1), math.clamp(aB[i], 0, 1)) end
-      end
-    end
   end
 end
 
@@ -941,59 +1268,197 @@ dragL.InputBegan:Connect(function(io)
     if x > ap.X + as.X - 34 and y > ap.Y + as.Y - 34 then return end -- bottom-right grip zone never drags
     for _, o in ipairs(gui:GetGuiObjectsAtPosition(x, y)) do
       if o == dragL then break end -- reached our layer: nothing interactive above
-      if o:IsA("TextButton") or o == rh or rh:IsAncestorOf(o) then return end
+      if o:IsA("TextButton") or o:IsA("TextBox") or o == rh or rh:IsAncestorOf(o) then return end
     end
     S.dragging = { sx = x, sy = y, px = win.Position.X.Offset, py = win.Position.Y.Offset, moved = false }
     if S.pressOv then tw(S.pressOv, TI_PRT, { BackgroundTransparency = (G.PressOverlayOp or 0.94) }) end
   end
 end)
 
--- ============================================== floating traffic lights (no bar)
+-- ============================================== hotbar traffic lights
 local function dot(color, xoff)
-  local b = Instance.new("Frame", win)
-  b.Size = UDim2.fromOffset(14, 14)
-b.Position = UDim2.new(0, 16 + xoff, 0, 14)
-    b.BackgroundColor3 = color
-    b.ZIndex = 3
+  local b = Instance.new("Frame", hotbar)
+  b.Size = UDim2.fromOffset(16, 16)
+  b.Position = UDim2.new(0, 16 + xoff, 0, 16)
+  b.BackgroundColor3 = color
+  b.BorderSizePixel = 0
+  b.ZIndex = 101
+  corner(b, 8)
   local hit = Instance.new("TextButton", b)
   hit.Text = ""
   hit.BackgroundTransparency = 1
   hit.Size = UDim2.fromScale(1.7, 1.7)
   hit.AnchorPoint = Vector2.new(0.5, 0.5)
   hit.Position = UDim2.fromScale(0.5, 0.5)
-  hit.ZIndex = 4
+  hit.ZIndex = 102
   return b, hit
 end
 
 local closeDot, closeHit = dot(RED, 0)
-local minDot,   minHit   = dot(YELLOW, 20)
-local fullDot,  fullHit  = dot(GREEN, 40)
-local dotTitle = Instance.new("Frame", win) -- hover proxy region for glyphs
-dotTitle.Position = UDim2.new(0, 10, 0, 8)
-dotTitle.Size = UDim2.fromOffset(74, 26)
-dotTitle.BackgroundTransparency = 1
-
+local minDot,   minHit   = dot(YELLOW, 22)
+local fullDot,  fullHit  = dot(GREEN, 44)
 local gx = iconFx(closeDot, ICONS.x, 7, Color3.fromRGB(60, 30, 25), 0.1)
-gx.AnchorPoint = Vector2.new(0.5, 0.5); gx.Position = UDim2.fromScale(0.5, 0.5); gx.ZIndex = 5; gx.Visible = false
-local gm = iconFx(minDot, ICONS.minus, 7, Color3.fromRGB(60, 50, 10), 0.1)
-gm.AnchorPoint = Vector2.new(0.5, 0.5); gm.Position = UDim2.fromScale(0.5, 0.5); gm.ZIndex = 5; gm.Visible = false
+gx.AnchorPoint = Vector2.new(0.5, 0.5); gx.Position = UDim2.fromScale(0.5, 0.5); gx.ZIndex = 103; gx.Visible = true
+local gm = iconFx(minDot, ICONS.minus, 8, Color3.fromRGB(60, 50, 10), 0.05)
+gm.AnchorPoint = Vector2.new(0.5, 0.5); gm.Position = UDim2.fromScale(0.5, 0.5); gm.ZIndex = 103; gm.Visible = true
 local ge = iconFx(fullDot, ICONS.maximize, 7, Color3.fromRGB(15, 60, 30), 0.1)
-ge.AnchorPoint = Vector2.new(0.5, 0.5); ge.Position = UDim2.fromScale(0.5, 0.5); ge.ZIndex = 5; ge.Visible = false
-dotTitle.MouseEnter:Connect(function() gx.Visible = true; gm.Visible = true; ge.Visible = true end)
-dotTitle.MouseLeave:Connect(function() gx.Visible = false; gm.Visible = false; ge.Visible = false end)
+ge.AnchorPoint = Vector2.new(0.5, 0.5); ge.Position = UDim2.fromScale(0.5, 0.5); ge.ZIndex = 103; ge.Visible = true
+local function paintTrafficControls()
+  if S.minimized then
+    closeDot.Position = UDim2.new(0, 18, 0, 11)
+    minDot.Position = UDim2.new(0, 40, 0, 11)
+    fullDot.Position = UDim2.new(0, 62, 0, 11)
+    minDot.BackgroundColor3 = Color3.fromRGB(128, 128, 128)
+    minHit.Active = false
+    minHit.Selectable = false
+    gm.Visible = false
+  else
+    closeDot.Position = UDim2.new(0, 16, 0, 16)
+    minDot.Position = UDim2.new(0, 38, 0, 16)
+    fullDot.Position = UDim2.new(0, 60, 0, 16)
+    minDot.BackgroundColor3 = YELLOW
+    minHit.Active = true
+    minHit.Selectable = true
+    gm.Visible = true
+  end
+
+  if S.sidebarHidden and not S.minimized then
+    fullDot.BackgroundColor3 = Color3.fromRGB(128, 128, 128)
+    ge.Image = ICONS.eye
+    ge.ImageColor3 = Color3.new(1, 1, 1)
+    ge.ImageTransparency = 0
+    ge.Size = UDim2.fromOffset(11, 11)
+  else
+    fullDot.BackgroundColor3 = GREEN
+    ge.Image = ICONS.maximize
+    ge.ImageColor3 = Color3.fromRGB(15, 60, 30)
+    ge.ImageTransparency = 0.1
+    ge.Size = UDim2.fromOffset(7, 7)
+  end
+end
+paintTrafficControls()
 
 -- ============================================== SIDEBAR
 local sidebar = makeGlass(win, 16, { name = "Sidebar", tint = THEME.sideTint, baseT = THEME.sideT, innerRing = true, crisp = true })
-sidebar.Position = UDim2.new(0, 34, 0, 34)
-sidebar.Size = UDim2.new(0, 208, 1, -134)
+sidebar.Position = UDim2.new(0, 20, 0, 58)
+sidebar.Size = UDim2.new(0, 208, 1, -82)
 S.sidebar = sidebar
 sidebar.ZIndex = 3
 
+local sidebarItems = Instance.new("ScrollingFrame", sidebar)
+sidebarItems.Name = "SidebarItems"
+sidebarItems.Position = UDim2.new(0, 4, 0, 28)
+sidebarItems.Size = UDim2.new(1, -8, 1, -104)
+sidebarItems.BackgroundTransparency = 1
+sidebarItems.BorderSizePixel = 0
+sidebarItems.CanvasSize = UDim2.new()
+sidebarItems.AutomaticCanvasSize = Enum.AutomaticSize.Y
+sidebarItems.ScrollingDirection = Enum.ScrollingDirection.Y
+sidebarItems.ScrollingEnabled = true
+sidebarItems.ScrollBarThickness = 3
+sidebarItems.ScrollBarImageColor3 = THEME.grip
+sidebarItems.ScrollBarImageTransparency = 0.35
+sidebarItems.ZIndex = 4
+
 local content = Instance.new("Frame", win)
 content.Name = "Content"
-content.Position = UDim2.new(0, 252, 0, 34)
-content.Size = UDim2.new(1, -286, 1, -68)
+content.Position = UDim2.new(0, 250, 0, 58)
+content.Size = UDim2.new(1, -270, 1, -82)
 content.BackgroundTransparency = 1
+
+local contentSurface = Instance.new("Frame", content)
+contentSurface.Name = "ContentSurface"
+contentSurface.Size = UDim2.fromScale(1, 1)
+contentSurface.BackgroundColor3 = THEME.sideTint
+contentSurface.BackgroundTransparency = THEME.contentT
+contentSurface.BorderSizePixel = 0
+corner(contentSurface, 18)
+
+local sidebarToggle = Instance.new("TextButton", win)
+sidebarToggle.Name = "SidebarToggle"
+sidebarToggle.Position = UDim2.new(0, 188, 0, 66)
+sidebarToggle.Size = UDim2.fromOffset(20, 20)
+sidebarToggle.BackgroundTransparency = 1
+sidebarToggle.BorderSizePixel = 0
+sidebarToggle.Text = ""
+sidebarToggle.AutoButtonColor = false
+sidebarToggle.ZIndex = 30
+local sidebarHeader = txt(win, "SIDEBAR", 10, Enum.Font.GothamBold, "dim")
+sidebarHeader.Name = "SidebarHeader"
+sidebarHeader.Position = UDim2.new(0, 34, 0, 68)
+sidebarHeader.Size = UDim2.fromOffset(64, 16)
+sidebarHeader.ZIndex = 30
+local sidebarGlyph = Instance.new("ImageLabel", sidebarToggle)
+sidebarGlyph.Name = "LucideGlyph"
+sidebarGlyph.AnchorPoint = Vector2.new(0.5, 0.5)
+sidebarGlyph.Position = UDim2.fromScale(0.5, 0.5)
+sidebarGlyph.Size = UDim2.fromOffset(14, 14)
+sidebarGlyph.BackgroundTransparency = 1
+sidebarGlyph.ZIndex = 31
+local function paintSidebarGlyph()
+  sidebarGlyph.Image = S.sidebarHidden and ICONS.eye or ICONS.eyeOff
+  sidebarGlyph.ImageColor3 = THEME.textHi
+end
+paintSidebarGlyph()
+settingsOpen = S.restoreSettings
+local function setSidebarHidden(hidden)
+  if hidden == S.sidebarHidden then return end
+  if hidden then
+    settingsBeforeSidebarHide = settingsOpen
+  end
+  S.sidebarHidden = hidden
+  sidebar.Visible = not S.sidebarHidden
+  sidebarHeader.Visible = not hidden
+  sidebarToggle.Visible = not hidden and not S.minimized
+  sidebarToggle.Position = UDim2.new(0, hidden and 6 or 188, 0, 66)
+  sidebarHeader.Position = UDim2.new(0, hidden and 42 or 34, 0, 68)
+  paintSidebarGlyph()
+  paintTrafficControls()
+  local contentX = hidden and 20 or 250
+  local contentRight = hidden and 40 or 270
+  tw(content, TI_SM, {
+    Position = UDim2.new(0, contentX, 0, 58),
+    Size = UDim2.new(1, -contentRight, 1, -82),
+  })
+  if S.showPage then
+    S.showPage(hidden and "overview" or (settingsBeforeSidebarHide and "settings" or "overview"))
+  end
+  scheduleConfigSave()
+end
+bind(sidebarToggle.Activated:Connect(function()
+  setSidebarHidden(not S.sidebarHidden)
+end))
+
+local searchSurface = Instance.new("Frame", hotbar)
+searchSurface.Name = "FeatureSearchSurface"
+searchSurface.Position = UDim2.new(0, 90, 0, 8)
+searchSurface.Size = UDim2.new(1, -180, 0, 32)
+searchSurface.BackgroundColor3 = THEME.pillTint
+searchSurface.BackgroundTransparency = THEME.pillT
+searchSurface.BorderSizePixel = 0
+searchSurface.ZIndex = 100
+corner(searchSurface, 10)
+
+searchBox = Instance.new("TextBox", hotbar)
+searchBox.Name = "FeatureSearch"
+searchBox.Position = UDim2.new(0, 124, 0, 8)
+searchBox.Size = UDim2.new(1, -214, 0, 32)
+searchBox.BackgroundTransparency = 1
+searchBox.BorderSizePixel = 0
+searchBox.ClearTextOnFocus = false
+searchBox.Font = Enum.Font.Gotham
+searchBox.PlaceholderText = "Search features..."
+searchBox.PlaceholderColor3 = THEME.textDim
+searchBox.Text = S.searchText
+searchBox.TextColor3 = THEME.textHi
+searchBox.TextSize = 13
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.ZIndex = 101
+local searchIcon = icon(hotbar, ICONS.textSearch, 18, "hi", 0)
+searchIcon.Name = "LucideTextSearch"
+searchIcon.AnchorPoint = Vector2.new(0, 0.5)
+searchIcon.Position = UDim2.new(0, 100, 0, 24)
+searchIcon.ZIndex = 102
 
 -- overview page
 local ovPage = Instance.new("Frame", content)
@@ -1001,22 +1466,123 @@ ovPage.Name = "Overview"
 ovPage.BackgroundTransparency = 1
 ovPage.Size = UDim2.fromScale(1, 1)
 
-local cntKind = txt(ovPage, "OVERVIEW", 10, Enum.Font.GothamBold, "dim", 0.25)
+local cntKind = txt(ovPage, "OVERVIEW", 10, Enum.Font.GothamBold, "dim")
 cntKind.Position = UDim2.new(0, 12, 0, 8)
 cntKind.Size = UDim2.fromOffset(240, 12)
 cntKind.TextXAlignment = Enum.TextXAlignment.Left
 
-local cntTitle = txt(ovPage, "Coming Soon...", 24, Enum.Font.GothamBold, "hi")
-cntTitle.Position = UDim2.new(0, 12, 0, 26)
-cntTitle.Size = UDim2.new(1, -24, 0, 32)
+local cntTitle = txt(ovPage, "Lobby", 24, Enum.Font.GothamBold, "hi")
+cntTitle.Position = UDim2.new(0, 12, 0, 24)
+cntTitle.Size = UDim2.new(1, -24, 0, 26)
 cntTitle.TextXAlignment = Enum.TextXAlignment.Left
 
-local cntBody = txt(ovPage, "This module is on the way.", 14, Enum.Font.Gotham, "dim", 0.2)
-cntBody.Position = UDim2.new(0, 14, 0, 70)
-cntBody.Size = UDim2.new(1, -28, 1, -90)
-cntBody.TextXAlignment = Enum.TextXAlignment.Left
-cntBody.TextYAlignment = Enum.TextYAlignment.Top
-cntBody.TextWrapped = true
+-- Claim All pill in lobby
+local claimOv = Instance.new("Frame", ovPage)
+claimOv.Name = "ClaimAllPill"
+claimOv.Position = UDim2.new(0, 12, 0, 70)
+claimOv.Size = UDim2.new(0, 260, 0, 56)
+claimOv.BackgroundColor3 = THEME.pillTint
+claimOv.BackgroundTransparency = THEME.pillT
+claimOv.BorderSizePixel = 0
+claimOv.ZIndex = 4
+corner(claimOv, 16)
+
+local claimIcon = icon(claimOv, ICONS.gift, 18, "hi", 0.1)
+claimIcon.Name = "ClaimGiftIcon"
+claimIcon.AnchorPoint = Vector2.new(0, 0.5)
+claimIcon.Position = UDim2.new(0, 14, 0.5, 0)
+claimIcon.ZIndex = 5
+
+local claimLabel = txt(claimOv, "CLAIM ALL", 15, Enum.Font.GothamBold, "hi")
+claimLabel.Position = UDim2.new(0, 42, 0, 10)
+claimLabel.Size = UDim2.new(1, -110, 0, 18)
+claimLabel.TextXAlignment = Enum.TextXAlignment.Left
+claimLabel.ZIndex = 5
+
+local claimSub = txt(claimOv, "Auto-claim codes, quests, battlepass, events, leaderboard, level tree, geodes, gold", 10, Enum.Font.Gotham, "dim")
+claimSub.Position = UDim2.new(0, 42, 0, 28)
+claimSub.Size = UDim2.new(1, -110, 0, 26)
+claimSub.TextXAlignment = Enum.TextXAlignment.Left
+claimSub.TextYAlignment = Enum.TextYAlignment.Top
+claimSub.TextWrapped = true
+claimSub.ZIndex = 5
+
+local claimHit = Instance.new("TextButton", claimOv)
+claimHit.Name = "ClaimHit"
+claimHit.Text = ""
+claimHit.BackgroundTransparency = 1
+claimHit.Size = UDim2.fromScale(1, 1)
+claimHit.ZIndex = 6
+claimHit.Active = true
+claimHit.Selectable = true
+
+local claimStatus = txt(ovPage, "Idle", 11, Enum.Font.Gotham, "dim")
+claimStatus.Name = "ClaimStatus"
+claimStatus.Position = UDim2.new(0, 12, 0, 134)
+claimStatus.Size = UDim2.new(1, -24, 0, 14)
+claimStatus.TextXAlignment = Enum.TextXAlignment.Left
+claimStatus.ZIndex = 4
+
+-- ============================================== CLAIM ALL LOGIC
+local claimState = {
+  running = false,
+  lastResult = "",
+  totalClaimed = 0,
+}
+
+local function claimSetStatus(text)
+  claimStatus.Text = text
+  print("[N's 'tion] ClaimAll: " .. text)
+end
+
+local function claimAll()
+  if claimState.running then return end
+  claimState.running = true
+  claimState.totalClaimed = 0
+  claimSetStatus("Scanning for claimables...")
+
+  -- This will be populated once we explore the game via MCP
+  -- The bridge must be connected (bridge.lua running in executor)
+  -- For now, this is a placeholder structure
+
+  local results = {}
+
+  -- TODO: These will be filled in after MCP exploration:
+  -- 1. Redeemable codes
+  -- 2. Quest rewards
+  -- 3. Index rewards
+  -- 4. Battlepasses (2)
+  -- 5. Event quests
+  -- 6. Tournament/leaderboard rewards
+  -- 7. Level tree rewards
+  -- 8. Resource drill geodes
+  -- 9. Gold mine gold
+
+  claimState.running = false
+  claimSetStatus("No claimables found (explore game via MCP to enable)")
+end
+
+bind(claimHit.Activated:Connect(function()
+  claimAll()
+end))
+
+-- ============================================== settings page (opens via profile card, behaves like a category)
+
+local searchResults = Instance.new("ScrollingFrame", ovPage)
+searchResults.Name = "FeatureSearchResults"
+searchResults.Position = UDim2.new(0, 12, 0, 64)
+searchResults.Size = UDim2.new(1, -24, 1, -76)
+searchResults.BackgroundTransparency = 1
+searchResults.BorderSizePixel = 0
+searchResults.CanvasSize = UDim2.new()
+searchResults.AutomaticCanvasSize = Enum.AutomaticSize.Y
+searchResults.ScrollingDirection = Enum.ScrollingDirection.Y
+searchResults.ScrollBarThickness = 4
+searchResults.Visible = false
+searchResults.ZIndex = 2
+local searchResultsLayout = Instance.new("UIListLayout", searchResults)
+searchResultsLayout.Padding = UDim.new(0, 10)
+searchResultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
 -- settings page (opens via profile card, behaves like a category)
 local setPage = Instance.new("Frame", content)
@@ -1025,7 +1591,7 @@ setPage.BackgroundTransparency = 1
 setPage.Size = UDim2.fromScale(1, 1)
 setPage.Visible = false
 
-local setLbl = txt(setPage, "SETTINGS", 10, Enum.Font.GothamBold, "dim", 0.25)
+local setLbl = txt(setPage, "SETTINGS", 10, Enum.Font.GothamBold, "dim")
 setLbl.Position = UDim2.new(0, 12, 0, 8)
 setLbl.Size = UDim2.fromOffset(240, 12)
 setLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -1036,49 +1602,188 @@ setTitle.Size = UDim2.new(1, -24, 0, 32)
 setTitle.TextXAlignment = Enum.TextXAlignment.Left
 
 local rows = {}
+local settingSurfaces = {}
+local descriptionOverlay = Instance.new("Frame", content)
+descriptionOverlay.Name = "DescriptionDetails"
+descriptionOverlay.Size = UDim2.fromScale(1, 1)
+descriptionOverlay.BackgroundColor3 = THEME.winTint
+descriptionOverlay.BackgroundTransparency = 0.08
+descriptionOverlay.BorderSizePixel = 0
+descriptionOverlay.Visible = false
+descriptionOverlay.ZIndex = 20
+corner(descriptionOverlay, 14)
+
+local detailTitle = txt(descriptionOverlay, "", 17, Enum.Font.GothamBold, "hi")
+detailTitle.Position = UDim2.new(0, 16, 0, 14)
+detailTitle.Size = UDim2.new(1, -64, 0, 28)
+detailTitle.ZIndex = 22
+
+local detailScroll = Instance.new("ScrollingFrame", descriptionOverlay)
+detailScroll.Name = "FullDescription"
+detailScroll.Position = UDim2.new(0, 16, 0, 52)
+detailScroll.Size = UDim2.new(1, -32, 1, -68)
+detailScroll.BackgroundTransparency = 1
+detailScroll.BorderSizePixel = 0
+detailScroll.CanvasSize = UDim2.new()
+detailScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+detailScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+detailScroll.ScrollBarThickness = 4
+detailScroll.ZIndex = 22
+
+local detailText = txt(detailScroll, "", 13, Enum.Font.Gotham, "dim")
+detailText.Name = "FullDescriptionText"
+detailText.Position = UDim2.fromOffset(0, 0)
+detailText.Size = UDim2.new(1, -10, 0, 0)
+detailText.AutomaticSize = Enum.AutomaticSize.Y
+detailText.TextWrapped = true
+detailText.TextYAlignment = Enum.TextYAlignment.Top
+detailText.ZIndex = 23
+
+local detailHide = Instance.new("TextButton", descriptionOverlay)
+detailHide.Name = "HideDescription"
+detailHide.AnchorPoint = Vector2.new(1, 0)
+detailHide.Position = UDim2.new(1, -12, 0, 12)
+detailHide.Size = UDim2.fromOffset(30, 30)
+detailHide.BackgroundTransparency = 1
+detailHide.BorderSizePixel = 0
+detailHide.Text = ""
+detailHide.AutoButtonColor = false
+detailHide.ZIndex = 24
+local detailEye = icon(detailHide, ICONS.eyeOff, 20, "hi", 0)
+detailEye.Name = "LucideEyeOff"
+detailEye.AnchorPoint = Vector2.new(0.5, 0.5)
+detailEye.Position = UDim2.fromScale(0.5, 0.5)
+detailEye.ZIndex = 25
+bind(detailHide.Activated:Connect(function()
+  descriptionOverlay.Visible = false
+end))
+
+local SETTING_PILL_STYLE = {
+  height = 68,
+  cornerRadius = 16,
+  horizontalInset = 12,
+  iconInset = 14,
+  iconSize = 18,
+  textInset = 42,
+  titleRightInset = 130,
+  descriptionRightInset = 150,
+  titleTopInset = 5,
+  titleHeight = 18,
+  titleDescriptionOffset = 22,
+  titleDescriptionGap = 4,
+  descriptionHeight = 26,
+  textVerticalInset = 10,
+  switchWidth = 48,
+  switchHeight = 28,
+  switchRightInset = 12,
+  switchKnob = 24,
+  spacing = 12,
+  firstRowY = 70,
+}
+
 local function makeSwitchRow(y, iconId, label, sub, getOn)
-  local rowIcon = icon(setPage, iconId, 16, "hi", 0.25)
-  rowIcon.Position = UDim2.new(0, 14, 0, y + 4)
-  rowIcon.ZIndex = 3
+  local surface = Instance.new("Frame", setPage)
+  surface.Name = "SettingPill"
+  surface.Position = UDim2.new(0, SETTING_PILL_STYLE.horizontalInset, 0, y - 8)
+  surface.Size = UDim2.new(1, -SETTING_PILL_STYLE.horizontalInset * 2, 0, SETTING_PILL_STYLE.height)
+  surface.BackgroundColor3 = THEME.pillTint
+  surface.BackgroundTransparency = THEME.pillT
+  surface.BorderSizePixel = 0
+  surface.ZIndex = 2
+  corner(surface, SETTING_PILL_STYLE.cornerRadius)
+  settingSurfaces[#settingSurfaces + 1] = surface
 
-  local rowLabel = txt(setPage, label, 15, Enum.Font.GothamMedium, "hi", 0.1)
-  rowLabel.Position = UDim2.new(0, 40, 0, y)
-  rowLabel.Size = UDim2.new(1, -140, 0, 18)
+  local rowIcon = icon(surface, iconId, SETTING_PILL_STYLE.iconSize, "hi", 0.1)
+  rowIcon.AnchorPoint = Vector2.new(0, 0.5)
+  rowIcon.Position = UDim2.new(0, SETTING_PILL_STYLE.iconInset, 0.5, 0)
+  rowIcon.ZIndex = 4
+
+  local rowLabel = txt(surface, label, 15, Enum.Font.GothamMedium, "hi")
+  rowLabel.Position = UDim2.new(0, SETTING_PILL_STYLE.textInset, 0, SETTING_PILL_STYLE.titleTopInset)
+  rowLabel.Size = UDim2.new(1, -SETTING_PILL_STYLE.titleRightInset, 0, SETTING_PILL_STYLE.titleHeight)
   rowLabel.TextXAlignment = Enum.TextXAlignment.Left
-  rowLabel.ZIndex = 3
+  rowLabel.ZIndex = 4
 
-  local rowSub = txt(setPage, sub, 11, Enum.Font.Gotham, "dim", 0.2)
-  rowSub.Position = UDim2.new(0, 40, 0, y + 23)
-  rowSub.Size = UDim2.new(1, -160, 0, 26)
+  local rowSub = txt(surface, sub, 11, Enum.Font.Gotham, "dim")
+  rowSub.Position = UDim2.new(0, SETTING_PILL_STYLE.textInset, 0, SETTING_PILL_STYLE.titleDescriptionOffset)
+  rowSub.Size = UDim2.new(1, -SETTING_PILL_STYLE.descriptionRightInset, 0, SETTING_PILL_STYLE.descriptionHeight)
+  rowSub.TextXAlignment = Enum.TextXAlignment.Left
+  rowSub.TextYAlignment = Enum.TextYAlignment.Top
   rowSub.TextWrapped = true
-  rowSub.ZIndex = 3
+  rowSub.ZIndex = 4
 
-  local pill = Instance.new("Frame", setPage)
+  local more = Instance.new("TextButton", surface)
+  more.Name = "MoreDescription"
+  more.AnchorPoint = Vector2.new(1, 0.5)
+  more.Position = UDim2.new(1, -72, 0, 45)
+  more.Size = UDim2.fromOffset(24, 24)
+  more.BackgroundTransparency = 1
+  more.BorderSizePixel = 0
+  more.Text = ""
+  more.AutoButtonColor = false
+  more.Visible = false
+  more.ZIndex = 6
+  local moreGlyph = icon(more, ICONS.ellipsis, 20, "hi", 0)
+  moreGlyph.Name = "LucideEllipsisVertical"
+  moreGlyph.AnchorPoint = Vector2.new(0.5, 0.5)
+  moreGlyph.Position = UDim2.fromScale(0.5, 0.5)
+  moreGlyph.ZIndex = 7
+
+  local function layoutRowText()
+    local width = rowSub.AbsoluteSize.X - 4
+    if width <= 0 then return end
+    local measured = TextSvc:GetTextSize(sub, rowSub.TextSize, rowSub.Font, Vector2.new(width, 10000))
+    local descriptionHeight = math.min(measured.Y, SETTING_PILL_STYLE.descriptionHeight)
+    local groupHeight = SETTING_PILL_STYLE.titleHeight + SETTING_PILL_STYLE.titleDescriptionGap + descriptionHeight
+    local labelY = math.max(
+      SETTING_PILL_STYLE.textVerticalInset,
+      (surface.AbsoluteSize.Y - groupHeight) / 2
+    )
+    rowLabel.Position = UDim2.new(0, SETTING_PILL_STYLE.textInset, 0, labelY)
+    rowSub.Position = UDim2.new(0, SETTING_PILL_STYLE.textInset, 0,
+      labelY + SETTING_PILL_STYLE.titleHeight + SETTING_PILL_STYLE.titleDescriptionGap)
+    rowSub.Size = UDim2.new(1, -SETTING_PILL_STYLE.descriptionRightInset, 0, descriptionHeight)
+    more.Visible = measured.Y > descriptionHeight + 1
+  end
+  bind(rowSub:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutRowText))
+  bind(surface:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutRowText))
+  task.defer(layoutRowText)
+  bind(more.Activated:Connect(function()
+    detailTitle.Text = label
+    detailText.Text = sub
+    detailScroll.CanvasPosition = Vector2.zero
+    descriptionOverlay.Visible = true
+  end))
+
+  local pill = Instance.new("Frame", surface)
   pill.Name = "Switch"
-  pill.AnchorPoint = Vector2.new(1, 0)
-  pill.Position = UDim2.new(1, -12, 0, y + 2)
-  pill.Size = UDim2.fromOffset(48, 28)
+  pill.AnchorPoint = Vector2.new(1, 0.5)
+  pill.Position = UDim2.new(1, -SETTING_PILL_STYLE.switchRightInset, 0.5, 0)
+  pill.Size = UDim2.fromOffset(SETTING_PILL_STYLE.switchWidth, SETTING_PILL_STYLE.switchHeight)
   pill.BackgroundColor3 = GREEN
   pill.BorderSizePixel = 0
-pill.ZIndex = 3
-  corner(pill, 14)
+  pill.ZIndex = 4
+  corner(pill, SETTING_PILL_STYLE.switchHeight / 2)
 
   local knob = Instance.new("Frame", pill)
-knob.Size = UDim2.fromOffset(24, 24)
+knob.Size = UDim2.fromOffset(SETTING_PILL_STYLE.switchKnob, SETTING_PILL_STYLE.switchKnob)
   knob.BackgroundColor3 = Color3.new(1,1,1)
-  knob.ZIndex = 4
+  knob.ZIndex = 5
   knob.Position = UDim2.new(0, 2, 0, 2)
-  corner(knob, 12)
+  corner(knob, SETTING_PILL_STYLE.switchKnob / 2)
 
-  local hit = Instance.new("TextButton", setPage)
+  local hit = Instance.new("TextButton", surface)
   hit.Text = ""
   hit.BackgroundTransparency = 1
-  hit.Position = UDim2.new(0, 0, 0, y - 8)
-  hit.Size = UDim2.new(1, 0, 0, 56)
-  hit.ZIndex = 2
+  hit.Size = UDim2.fromScale(1, 1)
+  hit.ZIndex = 3
 
   local row = {
     hit = hit,
+    surface = surface,
+    label = label,
+    description = sub,
+    originalY = y,
     paint = function(instant)
       local on = getOn()
       local tPos = on and UDim2.new(1, -26, 0, 2) or UDim2.new(0, 2, 0, 2)
@@ -1096,12 +1801,109 @@ knob.Size = UDim2.fromOffset(24, 24)
   return row
 end
 
-local rowGlass = makeSwitchRow(70, ICONS.sliders, "Liquid Glass",
+local rowGlass = makeSwitchRow(SETTING_PILL_STYLE.firstRowY, ICONS.sliders, "Liquid Glass",
   "Frosted vibrancy over the world - or a flat opaque surface.",
   function() return S.mode == "glass" end)
-local rowDark = makeSwitchRow(140, ICONS.moon, "Dark Mode",
+local rowDark = makeSwitchRow(SETTING_PILL_STYLE.firstRowY + SETTING_PILL_STYLE.height + SETTING_PILL_STYLE.spacing, ICONS.moon, "Dark Mode",
   "Midnight surface - easier on the eyes.",
   function() return S.dark end)
+local rowAutoSave = makeSwitchRow(SETTING_PILL_STYLE.firstRowY + 2 * (SETTING_PILL_STYLE.height + SETTING_PILL_STYLE.spacing), ICONS.save, "Auto Save",
+  "Save and restore all settings and feature toggles on rejoin.",
+  function() return S.autoSave end)
+
+local searchableRows = { rowGlass, rowDark, rowAutoSave }
+for i, row in ipairs(searchableRows) do
+  row.surface.LayoutOrder = i
+end
+
+local function updateSearchResults()
+  local query = string.lower(string.gsub(searchBox.Text, "^%s*(.-)%s*$", "%1"))
+  if query == "" then
+    cntTitle.Text = "Coming Soon..."
+    cntBody.Text = defaultOverviewBody
+    cntBody.Visible = true
+    searchResults.Visible = false
+    for _, row in ipairs(searchableRows) do
+      row.surface.Parent = setPage
+      row.surface.Position = UDim2.new(0, SETTING_PILL_STYLE.horizontalInset, 0, row.originalY - 8)
+      row.surface.Size = UDim2.new(
+        1,
+        -SETTING_PILL_STYLE.horizontalInset * 2,
+        0,
+        SETTING_PILL_STYLE.height
+      )
+    end
+    ovPage.Visible = not settingsOpen
+    setPage.Visible = settingsOpen
+    return
+  end
+
+  local matches = {}
+  for _, row in ipairs(searchableRows) do
+    local searchableText = string.lower(row.label .. " " .. row.description)
+    if string.find(searchableText, query, 1, true) then
+      matches[#matches + 1] = row
+    else
+      row.surface.Parent = setPage
+    end
+  end
+
+  cntTitle.Text = "Search results (" .. #matches .. ")"
+  cntBody.Visible = #matches == 0
+  cntBody.Text = "No matching features."
+  searchResults.Visible = true
+  ovPage.Visible = true
+  setPage.Visible = false
+  for i, row in ipairs(matches) do
+    row.surface.Parent = searchResults
+    row.surface.Position = UDim2.new()
+    row.surface.Size = UDim2.new(1, -8, 0, SETTING_PILL_STYLE.height)
+    row.surface.LayoutOrder = i
+    row.surface.Visible = true
+  end
+end
+bind(searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+  S.searchText = searchBox.Text
+  updateSearchResults()
+  scheduleConfigSave()
+end))
+updateSearchResults()
+
+-- Register feature toggles through this helper to share the setting-pill style
+-- and persist their state with Auto Save.
+function UI.AddToggleSetting(key, iconId, label, description, defaultValue, onChanged)
+  if type(key) ~= "string" or #key == 0 or #key > 100 then
+    error("toggle setting key must be a non-empty string of at most 100 characters")
+  end
+  for _, row in ipairs(searchableRows) do
+    if row.stateKey == key then error("toggle setting already exists: " .. key) end
+  end
+
+  local lastY = SETTING_PILL_STYLE.firstRowY - SETTING_PILL_STYLE.spacing
+  for _, row in ipairs(searchableRows) do
+    lastY = math.max(lastY, row.originalY)
+  end
+  local row = makeSwitchRow(
+    lastY + SETTING_PILL_STYLE.height + SETTING_PILL_STYLE.spacing,
+    iconId,
+    label,
+    description,
+    function() return UI.GetToggleState(key, defaultValue) end
+  )
+  row.stateKey = key
+  row.surface.Name = "SettingPill_" .. safeFolderName(key)
+  searchableRows[#searchableRows + 1] = row
+  row.surface.LayoutOrder = #searchableRows
+  bind(row.hit.MouseButton1Click:Connect(function()
+    local nextValue = not UI.GetToggleState(key, defaultValue)
+    UI.SetToggleState(key, nextValue)
+    row.paint(false)
+    if onChanged then onChanged(nextValue) end
+  end))
+  if onChanged then onChanged(UI.GetToggleState(key, defaultValue)) end
+  updateSearchResults()
+  return row
+end
 
 -- ============================================== CATEGORIES (surface pills)
 local cats = {}
@@ -1112,17 +1914,18 @@ local function paintCat(b, hot, sel)
 end
 
 local function catBtn(idx)
-  local b = makeGlass(sidebar, 12, { name = "Cat" .. idx, tint = THEME.pillTint, baseT = THEME.pillT, interactive = true, elastic = true, glowMax = 0.14 })
+  local b = makeGlass(sidebarItems, 12, { name = "Cat" .. idx, tint = THEME.pillTint, baseT = THEME.pillT, interactive = true, elastic = true, glowMax = 0.14 })
   b.Size = UDim2.new(1, -14, 0, 46)
-  b.Position = UDim2.new(0, 7, 0, 10 + (idx - 1) * 52)
+  b.Position = UDim2.new(0, 7, 0, 6 + (idx - 1) * 52)
   b.ZIndex = 5
 
-  local mark = icon(b, ICONS.clock, 18, "hi", 0.1)
+  local mark = icon(b, idx == 1 and ICONS.house or ICONS.clock, 18, "hi", 0.1)
   mark.AnchorPoint = Vector2.new(0.5, 0.5)
   mark.Position = UDim2.new(0, 30, 0.5, 0)
   mark.ZIndex = 6
 
-  local lb = txt(b, "Coming Soon...", 14, Enum.Font.GothamMedium, "hi", 0.08)
+  local categoryName = idx == 1 and "Lobby" or "Coming Soon " .. idx
+  local lb = txt(b, categoryName, 14, Enum.Font.GothamMedium, "hi")
   lb.Position = UDim2.new(0, 52, 0.5, -8)
   lb.Size = UDim2.new(1, -60, 0, 16)
   lb.TextXAlignment = Enum.TextXAlignment.Left
@@ -1144,6 +1947,10 @@ local function catBtn(idx)
       if i == idx then paintCat(cats[i], false, true) else paintCat(cats[i], false, false) end
     end
     S.showPage("overview")
+    searchBox.Text = ""
+    cntTitle.Text = categoryName
+    claimStatus.Text = "Idle"
+    scheduleConfigSave()
   end)
 
   pressable(b, b.Size, hit)
@@ -1176,12 +1983,23 @@ nameT.Size = UDim2.new(1, -80, 0, 15)
 nameT.TextXAlignment = Enum.TextXAlignment.Left
 nameT.ZIndex = 6
 
-local gameT = txt(pc, "Now playing: " .. game.Name, 10, Enum.Font.Gotham, "dim", 0.15)
+local gameT = txt(pc, "Loading game...", 10, Enum.Font.Gotham, "dim")
 gameT.Position = UDim2.new(0, 58, 0, 31)
 gameT.Size = UDim2.new(1, -80, 0, 14)
 gameT.TextXAlignment = Enum.TextXAlignment.Left
 gameT.TextTruncate = Enum.TextTruncate.AtEnd
 gameT.ZIndex = 6
+bind(task.spawn(function()
+  local ok, info = pcall(function()
+    return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+  end)
+  if ok and type(info) == "table" and type(info.Name) == "string" and #info.Name > 0 then
+    gameT.Text = "Now playing: " .. info.Name
+  else
+    warn("[N's 'tion] could not get current place name: " .. tostring(info))
+    gameT.Text = "Place ID: " .. tostring(game.PlaceId)
+  end
+end))
 
 local gear = icon(pc, ICONS.settings, 14, "dim", 0.1)
 gear.Position = UDim2.new(1, -28, 0.5, -7)
@@ -1197,20 +2015,22 @@ pc.MouseEnter:Connect(function() tw(pc, TI_HOT, { BackgroundTransparency = THEME
 pc.MouseLeave:Connect(function() tw(pc, TI_HOT, { BackgroundTransparency = THEME.profT }) end)
 
 -- ============================================== page switching
-local settingsOpen = false
 function S.showPage(which)
   if which == "settings" then
     settingsOpen = true
+    searchBox.Visible = not S.minimized
     ovPage.Visible = false
     setPage.Visible = true
     for _, r in ipairs(rows) do r.paint(true) end
     for i = 1, 2 do paintCat(cats[i], false, false) end
   else
     settingsOpen = false
+    searchBox.Visible = not S.minimized
+    descriptionOverlay.Visible = false
     ovPage.Visible = true
     setPage.Visible = false
   end
-
+  scheduleConfigSave()
 end
 
 pbtn.MouseButton1Click:Connect(function()
@@ -1222,10 +2042,21 @@ pbtn.MouseButton1Click:Connect(function()
   end
 end)
 
+if S.restoreSidebarHidden then
+  setSidebarHidden(true)
+elseif S.restoreSettings then
+  S.showPage("settings")
+end
+if S.sel > 0 and S.searchText == "" then
+  cntTitle.Text = "Coming Soon " .. S.sel
+  claimStatus.Text = "Idle"
+end
+
 rowGlass.hit.MouseButton1Click:Connect(function()
   S.mode = (S.mode == "glass") and "opaque" or "glass"
   rowGlass.paint(false)
   S.applyMode()
+  scheduleConfigSave()
 end)
 
 rowDark.hit.MouseButton1Click:Connect(function()
@@ -1233,6 +2064,13 @@ rowDark.hit.MouseButton1Click:Connect(function()
   rowDark.paint(false)
   THEME = THEMES[S.dark and "dark" or "light"]
   S.applyTheme()
+  scheduleConfigSave()
+end)
+
+rowAutoSave.hit.MouseButton1Click:Connect(function()
+  S.autoSave = not S.autoSave
+  rowAutoSave.paint(false)
+  scheduleConfigSave(not S.autoSave)
 end)
 
 -- ============================================== MATERIAL MODE
@@ -1246,6 +2084,21 @@ function S.applyMode()
     BackgroundColor3 = glass and THEME.sideTint or THEME.opqSide,
     BackgroundTransparency = glass and THEME.sideT or THEME.opqSideT,
   })
+  tw(contentSurface, TI_SM, {
+    BackgroundColor3 = glass and THEME.sideTint or THEME.opqSide,
+    BackgroundTransparency = glass and THEME.contentT or 0,
+  })
+  tw(searchSurface, TI_SM, {
+    BackgroundColor3 = glass and THEME.pillTint or THEME.opqPill,
+    BackgroundTransparency = glass and THEME.pillT or 0,
+  })
+  for _, surface in ipairs(settingSurfaces) do
+    tw(surface, TI_SM, {
+      BackgroundColor3 = glass and THEME.pillTint or THEME.opqPill,
+      BackgroundTransparency = glass and THEME.pillT or 0,
+    })
+  end
+  sidebarToggle.BackgroundTransparency = 1
   for i = 1, 2 do
     tw(cats[i], TI_SM, { BackgroundColor3 = glass and THEME.pillTint or THEME.opqPill })
   end
@@ -1253,14 +2106,14 @@ function S.applyMode()
   for _, e in ipairs(rimSet) do
     local t = glass and (1 - 0.35 * (G.Aberration or 1)) or 1
     if not (G.LineFx ~= false) then t = 1 end -- borderless glass: no chromatic outlines
-    tw(e.s1, TI_SM, { Transparency = t })
-    tw(e.s2, TI_SM, { Transparency = t })
-    if e.s3 then tw(e.s3, TI_SM, { Transparency = math.min(0.985, t + 0.08) }) end
+    tw(e.s1, TI_SM, { BackgroundTransparency = t })
+    tw(e.s2, TI_SM, { BackgroundTransparency = t })
+    if e.s3 then tw(e.s3, TI_SM, { BackgroundTransparency = math.min(0.985, t + 0.08) }) end
   end
   -- glass-only material effects (refraction band, fresnel ring, rim light) vanish in opaque
   local showLines = glass and (G.LineFx ~= false)
   for _, e in ipairs(glassFx) do
-    tw(e.o, TI_SM, { Transparency = showLines and e.base or 1 })
+  tw(e.o, TI_SM, { [e.property] = showLines and e.base or 1 })
   end
   -- depth pass frames (top glow / bottom shade) are material too - fade in glass
   local depthVisible = glass
@@ -1282,9 +2135,17 @@ end
 
 -- ============================================== THEME
 function S.applyTheme()
+  THEME = THEMES[S.dark and "dark" or "light"]
+  paintPanicGlyph()
+  paintSidebarGlyph()
+  descriptionOverlay.BackgroundColor3 = THEME.winTint
   for _, e in ipairs(textRefs) do
     tw(e.o, TI_SM, { TextColor3 = (e.r == "dim") and THEME.textDim or THEME.textHi })
   end
+  tw(searchBox, TI_SM, {
+    TextColor3 = THEME.textHi,
+    PlaceholderColor3 = THEME.textDim,
+  })
   for _, e in ipairs(iconRefs) do
     tw(e.o, TI_SM, { ImageColor3 = (e.r == "dim") and THEME.textDim or THEME.textHi })
   end
@@ -1331,6 +2192,7 @@ bind(UIS.InputEnded:Connect(function(io)
     if S.dragging then
       S.winPos = Vector2.new(win.Position.X.Offset, win.Position.Y.Offset)
       S.dragging = nil
+      scheduleConfigSave()
     end
   end
 end))
@@ -1343,7 +2205,7 @@ rh.Position = UDim2.new(1, -2, 1, -2)
 rh.Size = UDim2.fromOffset(22, 22)
 rh.BackgroundTransparency = 1
 rh.ZIndex = 15
-shapeGrip(rh).Position = UDim2.new(1, -16, 1, -16)
+shapeGrip(rh).Position = UDim2.fromOffset(0, 0)
 
 rh.InputBegan:Connect(function(io)
   if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
@@ -1366,39 +2228,72 @@ bind(UIS.InputChanged:Connect(function(io)
 end))
 bind(UIS.InputEnded:Connect(function(io)
   if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
-    if S.resizing then S.resizing = nil end
+    if S.resizing then
+      S.resizing = nil
+      scheduleConfigSave()
+    end
   end
 end))
 
 -- ============================================== RED - KILL TOTALLY
 closeHit.MouseButton1Click:Connect(function()
+  writeConfig(false)
   UI.kill()
 end)
 
 -- ============================================== YELLOW - MINIMIZE
 minHit.MouseButton1Click:Connect(function()
-  S.minimized = not S.minimized
-  if S.minimized then
-    S.saved = { w = win.Size.X.Offset, h = win.Size.Y.Offset, x = win.Position.X.Offset, y = win.Position.Y.Offset }
-    sidebar.Visible = false
-    content.Visible = false
-    for _, f in ipairs(frost.vis) do f.Visible = false end
-    if frost.noiseLayers then for _, nl in ipairs(frost.noiseLayers) do nl.Visible = false end end
-    for _, sw in ipairs(sweepList) do sw.f.Visible = false end
-    twWin(TI_POP, { Size = UDim2.fromOffset(96, 38), Position = UDim2.new(1, -114, 1, -62) })
-  else
-    sidebar.Visible = true
-    content.Visible = true
-    for _, f in ipairs(frost.vis) do f.Visible = (S.mode == "glass") end
-    if frost.noiseLayers then for _, nl in ipairs(frost.noiseLayers) do nl.Visible = (S.mode == "glass") end end
-    local gv = S.saved or { w = UI.Config.StartSize.X, h = UI.Config.StartSize.Y, x = UI.Config.StartPos.X, y = UI.Config.StartPos.Y }
-    S.winSize = Vector2.new(gv.w, gv.h)
-    twWin(TI_POP, { Size = UDim2.fromOffset(gv.w, gv.h), Position = UDim2.fromOffset(gv.x, gv.y) })
-  end
+  if S.minimized then return end
+  S.saved = { w = win.Size.X.Offset, h = win.Size.Y.Offset, x = win.Position.X.Offset, y = win.Position.Y.Offset }
+  S.minimized = true
+  sidebar.Visible = false
+  content.Visible = false
+  sidebarToggle.Visible = false
+  sidebarHeader.Visible = false
+  searchBox.Visible = false
+  searchSurface.Visible = false
+  searchIcon.Visible = false
+  panicToggle.Visible = false
+  rh.Visible = false
+  paintTrafficControls()
+  for _, f in ipairs(frost.vis) do f.Visible = false end
+  if frost.noiseLayers then for _, nl in ipairs(frost.noiseLayers) do nl.Visible = false end end
+  for _, sw in ipairs(sweepList) do sw.f.Visible = false end
+  twWin(TI_POP, { Size = UDim2.fromOffset(96, 38), Position = UDim2.new(1, -114, 1, -62) })
+  scheduleConfigSave()
 end)
+
+local function restoreMinimizedWindow()
+  if not S.minimized then return end
+  S.minimized = false
+  paintTrafficControls()
+  sidebar.Visible = not S.sidebarHidden
+  content.Visible = true
+  sidebarToggle.Visible = not S.sidebarHidden
+  sidebarHeader.Visible = not S.sidebarHidden
+  searchBox.Visible = not settingsOpen
+  searchSurface.Visible = true
+  searchIcon.Visible = true
+  panicToggle.Visible = true
+  rh.Visible = true
+  for _, f in ipairs(frost.vis) do f.Visible = (S.mode == "glass") end
+  if frost.noiseLayers then for _, nl in ipairs(frost.noiseLayers) do nl.Visible = (S.mode == "glass") end end
+  for _, sw in ipairs(sweepList) do sw.f.Visible = (S.mode == "glass") end
+  local gv = S.saved or { w = UI.Config.StartSize.X, h = UI.Config.StartSize.Y, x = UI.Config.StartPos.X, y = UI.Config.StartPos.Y }
+  S.winSize = Vector2.new(gv.w, gv.h)
+  twWin(TI_POP, { Size = UDim2.fromOffset(gv.w, gv.h), Position = UDim2.fromOffset(gv.x, gv.y) })
+end
 
 -- ============================================== GREEN - FULLSCREEN
 fullHit.MouseButton1Click:Connect(function()
+  if S.minimized then
+    restoreMinimizedWindow()
+    return
+  end
+  if S.sidebarHidden then
+    setSidebarHidden(false)
+    return
+  end
   S.full = not S.full
   if S.full then
     S.savedFull = { w = win.Size.X.Offset, h = win.Size.Y.Offset, x = win.Position.X.Offset, y = win.Position.Y.Offset }
@@ -1408,6 +2303,7 @@ fullHit.MouseButton1Click:Connect(function()
     S.winSize = Vector2.new(gv.w, gv.h)
     twWin(TI_Q, { Size = UDim2.fromOffset(gv.w, gv.h), Position = UDim2.fromOffset(gv.x, gv.y) })
   end
+  scheduleConfigSave()
 end)
 
 -- ============================================== LIQUID MOTION LOOP
@@ -1537,16 +2433,26 @@ end))
 -- ============================================== FIRST PAINT
 for _, r in ipairs(rows) do r.paint(true) end
 S.applyTheme()
+scheduleConfigSave()
+
+if S.full then
+  win.Size = UDim2.new(1, -24, 1, -24)
+  win.Position = UDim2.fromOffset(12, 12)
+end
 
 local refW = win.Size
 local popW = UDim2.new(refW.X.Scale, refW.X.Offset * 0.94, refW.Y.Scale, refW.Y.Offset * 0.94)
 win.Size = popW
 syncShadow()
 twWin(TI_POP, { Size = refW })
+UI._saveConfig = function() writeConfig(false) end
+UI._cons = cons
 
 end -- UI.init
 
 function UI.kill()
+  if UI._saveConfig then UI._saveConfig() end
+  UI._saveConfig = nil
   for _, c in ipairs(UI._cons or {}) do
     pcall(function()
       if typeof(c) == "RBXScriptConnection" then c:Disconnect() end
