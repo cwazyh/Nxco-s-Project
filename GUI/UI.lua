@@ -116,9 +116,9 @@ local THEMES = {
     blur     = 0,    -- GLOBAL blur FORCED OFF: the frost behind our window is painted
                      -- locally (camera-sampled EditableImage) so the world stays crisp
     glareMul = 1.0,
-    winTint  = Color3.fromRGB(255, 255, 255), winT = 0.96, -- ~4% surface only: fog comes from blur, never from paint
-    sideTint = Color3.fromRGB(255, 255, 255), sideT = 0.78,
-    pillTint = Color3.fromRGB(255, 255, 255), pillT = 0.66, pillHot = 0.50, pillSel = 0.32,
+    winTint  = Color3.fromRGB(255, 255, 255), winT = 0.82, -- ~18% surface: visible glass
+    sideTint = Color3.fromRGB(255, 255, 255), sideT = 0.75,
+    pillTint = Color3.fromRGB(255, 255, 255), pillT = 0.65, pillHot = 0.50, pillSel = 0.32,
     profT = 0.60, profHot = 0.46,
     opqWin = Color3.fromRGB(243, 244, 248), opqSide = Color3.fromRGB(248, 249, 252),
     opqSideT = 0.05, opqPill = Color3.fromRGB(255, 255, 255),
