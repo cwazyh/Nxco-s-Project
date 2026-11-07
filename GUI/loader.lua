@@ -1,12 +1,12 @@
 --[[
-  Universal loader for liquid-glass-ui repo.
+  Universal loader for Nxco's Project repo.
   Loads every file in the repo through a single loadstring.
   
   Usage:
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/cwazyh/liquid-glass-ui/main/GUI/loader.lua"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/cwazyh/Nxco-s-Project/main/GUI/loader.lua"))()
 --]]
 
-local base = "https://raw.githubusercontent.com/cwazyh/liquid-glass-ui/main"
+local base = "https://raw.githubusercontent.com/cwazyh/Nxco-s-Project/main"
 
 -- Load files in dependency order
 local files = {
