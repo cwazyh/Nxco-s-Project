@@ -1,31 +1,31 @@
 -- =====================================================================
---  N's 'tion — Liquid Glass engine v5.4
+--  N's 'tion - Liquid Glass engine v5.4
 --  Targets the boatbomber Glassmorphic look with our own implementation,
 --  material values mapped 1:1 from their public config:
---   Thickness 0.15 · Refraction 4.0 · Chromatic Aberration 1.0
+--   Thickness 0.15 . Refraction 4.0 . Chromatic Aberration 1.0
 --   Fresnel 0.1 size / 40 hardness / 25 intensity
---   Glare 0.2 size / 40 hardness / 70 intensity / 90 convergence / 50 opposite / -50°
---   Blur 0.06-scale frost · Corner 24 · Superellipse 3
+--   Glare 0.2 size / 40 hardness / 70 intensity / 90 convergence / 50 opposite / -50deg
+--   Blur 0.06-scale frost . Corner 24 . Superellipse 3
 --  Interaction ports from alexkkork/liquid-glass-luau (Pro):
---   • spring physics (semi-implicit Euler, tension 170 / friction 26)
---   • elastic cursor pull + hover scale on interactive glass panes
---   • cursor-sheen hover glow, mouse-chasing rim gradients
---   • depth pass (top light / bottom shade), press overlay on window
+--   - spring physics (semi-implicit Euler, tension 170 / friction 26)
+--   - elastic cursor pull + hover scale on interactive glass panes
+--   - cursor-sheen hover glow, mouse-chasing rim gradients
+--   - depth pass (top light / bottom shade), press overlay on window
 --  v5.6 material upgrade:
---   • LOCAL painted backdrop frost (camera-sampled grid → Luau box blur →
+--   - LOCAL painted backdrop frost (camera-sampled grid -> Luau box blur ->
 --     EditableImage): blur exists ONLY behind our UI, at Frost=100 strength;
---     global BlurEffect is forced OFF — the world stays pixel-crisp
---   • hover shine sweeps: two gloss streaks slide in from the left and exit
+--     global BlurEffect is forced OFF - the world stays pixel-crisp
+--   - hover shine sweeps: two gloss streaks slide in from the left and exit
 --     right while hovered (repeating), replacing the static glare beams
 --  Foundation:
---   • LIGHT frosted glass by default; dark appearance is a settings toggle
---   • refraction band arcs + fresnel inner ring at the edge
---   • chromatic aberration split hairlines on the window rim only
---   • inset glare beams (no rounded-corner spill)
---   • rounded layered drop shadow (no square corners), synced to motion
---   • whole-window dragging (button-aware hit test), floating traffic lights
---   • profile card opens a SETTINGS content page like a normal button
---   • always-on-top watchdog (max DisplayOrder, re-asserted)
+--   - LIGHT frosted glass by default; dark appearance is a settings toggle
+--   - refraction band arcs + fresnel inner ring at the edge
+--   - chromatic aberration split hairlines on the window rim only
+--   - inset glare beams (no rounded-corner spill)
+--   - rounded layered drop shadow (no square corners), synced to motion
+--   - whole-window dragging (button-aware hit test), floating traffic lights
+--   - profile card opens a SETTINGS content page like a normal button
+--   - always-on-top watchdog (max DisplayOrder, re-asserted)
 --  Module shape: loadstring(src)() -> UI ; UI.init() ; UI.kill()
 -- =====================================================================
 
@@ -43,13 +43,13 @@ UI.Config = {
     -- names mirror the target's config for easy 1:1 tuning --
     Radius         = 24,     -- Corner Radius (offset 24)
     Superellipse   = 3.0,    -- look reference (Roblox has no SDF; UICorner approximates)
-    Thickness      = 22,     -- 0.15 scale ≈ 22px on the target's 150px widget
+    Thickness      = 22,     -- 0.15 scale ~ 22px on the target's 150px widget
     Refraction     = 4.00,   -- refraction factor (band arc strength)
     Aberration     = 1.00,   -- chromatic aberration (rim RGB split)
-    FresnelInner   = 15,     -- 0.1 scale ≈ 15px on the target's widget
+    FresnelInner   = 15,     -- 0.1 scale ~ 15px on the target's widget
     FresnelIntensity = 25,
     FresnelHardness  = 40,
-    GlareSize      = 36,     -- 0.2 scale ≈ 30px on the target's widget (px band)
+    GlareSize      = 36,     -- 0.2 scale ~ 30px on the target's widget (px band)
     GlareIntensity = 70,
     GlareHardness  = 40,
     GlareConvergence = 90,
@@ -60,7 +60,7 @@ UI.Config = {
     LineFx         = false,  -- edge linework (refraction band rings, fresnel ring, rim
                              -- light, CA hairlines): FALSE = clean borderless glass
     Frost          = 100,    -- painted backdrop frost strength (0-100+): heavier = creamier.
-                             -- True LOCALIZED blur only behind our UI — sampled via camera
+                             -- True LOCALIZED blur only behind our UI - sampled via camera
                              -- raycasts, blurred in Luau, written to an EditableImage.
     SweepGap       = 1.7,    -- seconds between shine sweep repeats while hovered
     -- liquid-glass interaction ports (alexkkork/liquid-glass-luau Pro spec) --
@@ -90,7 +90,7 @@ local AssetSvc  = game:GetService("AssetService")
 local lp        = Players.LocalPlayer
 
 if not lp then
-  warn("[N's 'tion] LocalPlayer is nil — wait for player to load, then run UI.init() manually")
+  warn("[N's 'tion] LocalPlayer is nil - wait for player to load, then run UI.init() manually")
   return
 end
 print("[N's 'tion] LocalPlayer found: " .. tostring(lp.Name))
@@ -292,7 +292,7 @@ local glassFx   = {} -- glass-only material effects (band/fresnel/rim light): hi
 -- Spring physics + cursor-reactive layers, ported from the behavior spec of
 -- alexkkork/liquid-glass-luau (Pro): semi-implicit Euler springs (tension 170 /
 -- friction 26), elastic mouse-follow of interactive panes, cursor-sheen hover
--- glow, mouse-chasing rim gradients, hover/press scale — re-implemented on the
+-- glow, mouse-chasing rim gradients, hover/press scale - re-implemented on the
 -- hub's own material stack so it obeys the glass/opaque theme matrix.
 
 local springs = {}
@@ -369,7 +369,7 @@ local function makeGlass(parent, radius, opts)
   corner(pane, radius)
 
 -- EDGE REFRACTION: 4 directional bands (Top/Bottom/Left/Right) with multiple
-  -- overlapping layers — simulates light bending through thick glass edges.
+  -- overlapping layers - simulates light bending through thick glass edges.
   -- Each layer has a depth factor and position offset that increases toward the edge.
   if isWindow or opts.innerRing then
     local refraction = G.Refraction or 4.0
@@ -428,7 +428,7 @@ local function makeGlass(parent, radius, opts)
     -- CHROMATIC ABERRATION: three overlapping edge frames tinted Red, Green, Blue,
     -- each slightly offset to create the rainbow edge effect.
     -- RedAdjusted = RGB(255,100,100), GreenAdjusted = RGB(100,255,100),
-    -- BlueAdjusted = RGB(100,100,255) — tinted toward pure RGB for stronger effect.
+    -- BlueAdjusted = RGB(100,100,255) - tinted toward pure RGB for stronger effect.
     local abIntensity = G.Aberration or 1.0
     local redTint   = Color3.fromRGB(255, 100, 100)
     local greenTint = Color3.fromRGB(100, 255, 100)
@@ -487,7 +487,7 @@ local function makeGlass(parent, radius, opts)
     })
     glassFx[#glassFx + 1] = { o = fs, base = 0 }
 
-    -- glass rim light: thin white bevel — brightest top-left, vanishing bottom-right.
+    -- glass rim light: thin white bevel - brightest top-left, vanishing bottom-right.
     -- Gradient-driven so it reads as material lighting, not a border outline.
     local hi = stroke(pane, 2.0, 1)
     local hg = Instance.new("UIGradient", hi)
@@ -563,7 +563,7 @@ local function makeGlass(parent, radius, opts)
   end
 
   if isWindow then
-    -- depth pass: light pools at the top, shade at the bottom — makes the
+    -- depth pass: light pools at the top, shade at the bottom - makes the
     -- flat pane read as a translucent slab with thickness.
     local function depthPass(colr, fromTop, opacity)
       local f = Instance.new("Frame", pane)
@@ -660,7 +660,7 @@ shadowRoot.Parent = gui
 UI._shadowRoot = shadowRoot
 
 local shadowLayers = {}
--- 10 feathered rings, 2px apart: reads as a gaussian halo — no per-layer hard edge
+-- 10 feathered rings, 2px apart: reads as a gaussian halo - no per-layer hard edge
 local SHADOW_PADS = { 2, 4, 6, 8, 10, 12, 14, 16, 18, 20 }
 for i, pad in ipairs(SHADOW_PADS) do
   local l = Instance.new("Frame")
@@ -685,7 +685,7 @@ local function twWin(ti, props)
 end
 
 -- ============================================== LOCAL BACKDROP FROST (v5.6)
--- BlurEffect only blurs the ENTIRE camera — "blur just behind the UI" doesn't
+-- BlurEffect only blurs the ENTIRE camera - "blur just behind the UI" doesn't
 -- exist as a service. So we PAINT it: the world behind the window is
 -- approximated on a coarse grid via camera raycasts (one color per cell, sky
 -- fallback), blurred in Luau at G.Frost strength, and written into an
@@ -716,7 +716,7 @@ do
   frost.img = layer
 
   -- FROST NOISE LAYERS: multiple overlapping frames with seeded pseudo-random
-  -- patterns at different rotations and scales — simulates the grain texture
+  -- patterns at different rotations and scales - simulates the grain texture
   -- of real frosted glass (Pro technique).
   local noiseLayers = {}
   local noiseCount = math.clamp(math.floor((G.Frost or 100) / 30), 2, 5)
@@ -840,13 +840,13 @@ do
 local function frostApply()
   local gw, gh, grid = frost.gw, frost.gh, frost.grid
   if not grid then return end
-  -- frost strength -> box-blur radius in cells; 100+ ⇒ heavy diffusion
+  -- frost strength -> box-blur radius in cells; 100+ => heavy diffusion
   local R = math.clamp(math.floor((G.Frost or 100) * 0.055 + 0.5), 2, 6)
   local aR, aG, aB = {}, {}, {}
   for i = 1, gw * gh do
     aR[i], aG[i], aB[i] = grid[i][1], grid[i][2], grid[i][3]
   end
-  for _ = 1, 3 do -- H / V / H passes ≈ gaussian
+  for _ = 1, 3 do -- H / V / H passes ~ gaussian
     local t1R, t1G, t1B = {}, {}, {}
     for gy = 1, gh do
       local base = (gy - 1) * gw
@@ -909,7 +909,6 @@ local function frostApply()
     end
     pcall(function() frost.edi:WritePixelsBuffer(Vector2.zero, buf) end)
     frost.img.ImageTransparency = math.clamp(1 - (0.18 + 0.40 * math.min(1, (G.Frost or 100) / 100)), 0, 1)
-  end
   else
     -- fallback painting: cell frames get the blurred colors directly
     if frost.cells then
@@ -1096,10 +1095,10 @@ knob.Size = UDim2.fromOffset(24, 24)
 end
 
 local rowGlass = makeSwitchRow(70, ICONS.sliders, "Liquid Glass",
-  "Frosted vibrancy over the world — or a flat opaque surface.",
+  "Frosted vibrancy over the world - or a flat opaque surface.",
   function() return S.mode == "glass" end)
 local rowDark = makeSwitchRow(140, ICONS.moon, "Dark Mode",
-  "Midnight surface — easier on the eyes.",
+  "Midnight surface - easier on the eyes.",
   function() return S.dark end)
 
 -- ============================================== CATEGORIES (surface pills)
@@ -1261,7 +1260,7 @@ function S.applyMode()
   for _, e in ipairs(glassFx) do
     tw(e.o, TI_SM, { Transparency = showLines and e.base or 1 })
   end
-  -- depth pass frames (top glow / bottom shade) are material too — fade in glass
+  -- depth pass frames (top glow / bottom shade) are material too - fade in glass
   local depthVisible = glass
   for _, e in ipairs(glassFrames) do
     tw(e.o, TI_SM, { BackgroundTransparency = depthVisible and e.base or 1 })
@@ -1346,7 +1345,7 @@ shapeGrip(rh).Position = UDim2.new(1, -16, 1, -16)
 
 rh.InputBegan:Connect(function(io)
   if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
-    S.dragging = nil -- resize locks the window in position — no drag while resizing
+    S.dragging = nil -- resize locks the window in position - no drag while resizing
     S.resizing = { mx = io.Position.X, my = io.Position.Y, w = win.Size.X.Offset, h = win.Size.Y.Offset }
   end
 end)
@@ -1369,12 +1368,12 @@ bind(UIS.InputEnded:Connect(function(io)
   end
 end))
 
--- ============================================== RED — KILL TOTALLY
+-- ============================================== RED - KILL TOTALLY
 closeHit.MouseButton1Click:Connect(function()
   UI.kill()
 end)
 
--- ============================================== YELLOW — MINIMIZE
+-- ============================================== YELLOW - MINIMIZE
 minHit.MouseButton1Click:Connect(function()
   S.minimized = not S.minimized
   if S.minimized then
@@ -1396,7 +1395,7 @@ minHit.MouseButton1Click:Connect(function()
   end
 end)
 
--- ============================================== GREEN — FULLSCREEN
+-- ============================================== GREEN - FULLSCREEN
 fullHit.MouseButton1Click:Connect(function()
   S.full = not S.full
   if S.full then
@@ -1566,7 +1565,7 @@ task.spawn(function()
     if not ok then
       warn("[N's 'tion] auto-boot ERROR: " .. tostring(err))
     elseif not UI._gui then
-      warn("[N's 'tion] auto-boot failed — call UI.init() manually")
+      warn("[N's 'tion] auto-boot failed - call UI.init() manually")
     end
   end
 end)
