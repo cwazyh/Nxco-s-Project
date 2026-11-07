@@ -834,10 +834,12 @@ do
       for gx = 1, frost.gw do
         sampleCell(cam, ap, as, vp, gx, gy)
       end
-      if (os.clock() - t0) * 1000 > budgetMs then break end
+if (os.clock() - t0) * 1000 > budgetMs then break end
     end
+    end
+  end
 
-local function frostApply()
+  local function frostApply()
   local gw, gh, grid = frost.gw, frost.gh, frost.grid
   if not grid then return end
   -- frost strength -> box-blur radius in cells; 100+ => heavy diffusion
